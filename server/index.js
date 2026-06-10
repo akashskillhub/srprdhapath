@@ -1,4 +1,5 @@
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -20,17 +21,20 @@ app.use(helmet({
 app.use('/uploads', express.static('uploads'));
 
 // Database Connection
-const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/spardhapath';
 
 const pyqHubController = require('./features/pyqhub/pyqhub.controller');
 
-mongoose.connect(MONGO_URI)
-  .then(() => {
-     console.log('Connected to MongoDB: SpardhaPath Database');
-     pyqHubController.initRootCategories();
-  })
-  .catch((err) => console.error('Could not connect to MongoDB:', err));
+// Cache MongoDB connection for Vercel serverless
+let cachedDb = null;
+async function connectToMongo() {
+  if (cachedDb) return cachedDb;
+  const db = await mongoose.connect(MONGO_URI);
+  cachedDb = db;
+  console.log('Connected to MongoDB: SpardhaPath Database');
+  await pyqHubController.initRootCategories();
+  return db;
+}
 
 // Routes
 app.use('/api/auth', require('./routes/auth.route'));
@@ -50,12 +54,24 @@ app.get('/', (req, res) => {
   res.send('Spardhapath Education API is running...');
 });
 
-const server = app.listen(PORT, () => {
-  console.log(`Server started on port ${PORT}`);
-});
+// Only run the server locally — Vercel handles this as a serverless function
+if (process.env.VERCEL !== '1') {
+  const PORT = process.env.PORT || 5000;
 
-// Configure server timeouts to support large 1GB PDF uploads (10-11 minutes)
-server.timeout = 10 * 60 * 1000;
-server.keepAliveTimeout = 10 * 60 * 1000;
-server.headersTimeout = 11 * 60 * 1000;
+  connectToMongo().catch((err) => console.error('Could not connect to MongoDB:', err));
+
+  const server = app.listen(PORT, () => {
+    console.log(`Server started on port ${PORT}`);
+  });
+
+  server.timeout = 10 * 60 * 1000;
+  server.keepAliveTimeout = 10 * 60 * 1000;
+  server.headersTimeout = 11 * 60 * 1000;
+}
+
+// Export for Vercel serverless
+module.exports = async (req, res) => {
+  await connectToMongo();
+  return app(req, res);
+};
 
